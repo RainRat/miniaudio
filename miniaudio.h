@@ -14062,7 +14062,7 @@ static MA_INLINE ma_int32 ma_dither_s32(ma_dither_mode ditherMode, ma_int32 dith
 Atomics
 
 **************************************************************************************************************************************************************/
-/* ma_atomic.h begin */
+/* c89atomic.h begin */
 #ifndef ma_atomic_h
 #if defined(__cplusplus)
 extern "C" {
@@ -14788,12 +14788,12 @@ typedef int ma_atomic_memory_order;
         typedef ma_uint8 ma_atomic_flag;
         #define ma_atomic_flag_test_and_set_explicit(ptr, order)    (ma_bool32)ma_atomic_test_and_set_explicit_8(ptr, order)
         #define ma_atomic_flag_clear_explicit(ptr, order)           ma_atomic_clear_explicit_8(ptr, order)
-        #define c89atoimc_flag_load_explicit(ptr, order)            ma_atomic_load_explicit_8(ptr, order)
+        #define ma_atomic_flag_load_explicit(ptr, order)            ma_atomic_load_explicit_8(ptr, order)
     #else
         typedef ma_uint32 ma_atomic_flag;
         #define ma_atomic_flag_test_and_set_explicit(ptr, order)    (ma_bool32)ma_atomic_test_and_set_explicit_32(ptr, order)
         #define ma_atomic_flag_clear_explicit(ptr, order)           ma_atomic_clear_explicit_32(ptr, order)
-        #define c89atoimc_flag_load_explicit(ptr, order)            ma_atomic_load_explicit_32(ptr, order)
+        #define ma_atomic_flag_load_explicit(ptr, order)            ma_atomic_load_explicit_32(ptr, order)
     #endif
 #elif defined(__clang__) || (defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)))
     #define MA_ATOMIC_HAS_NATIVE_COMPARE_EXCHANGE
@@ -14874,15 +14874,18 @@ typedef int ma_atomic_memory_order;
         __atomic_compare_exchange_n(dst, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
         return expected;
     }
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Watomic-alignment"
     static MA_INLINE ma_uint64 ma_atomic_compare_and_swap_64(volatile ma_uint64* dst, ma_uint64 expected, ma_uint64 desired)
     {
         __atomic_compare_exchange_n(dst, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
         return expected;
     }
+    #pragma clang diagnostic pop
     typedef ma_uint8 ma_atomic_flag;
     #define ma_atomic_flag_test_and_set_explicit(dst, order)        (ma_bool32)__atomic_test_and_set(dst, order)
     #define ma_atomic_flag_clear_explicit(dst, order)               __atomic_clear(dst, order)
-    #define c89atoimc_flag_load_explicit(ptr, order)                ma_atomic_load_explicit_8(ptr, order)
+    #define ma_atomic_flag_load_explicit(ptr, order)                ma_atomic_load_explicit_8(ptr, order)
 #else
     #define ma_atomic_memory_order_relaxed  1
     #define ma_atomic_memory_order_consume  2
@@ -15396,7 +15399,7 @@ typedef int ma_atomic_memory_order;
     typedef ma_uint8 ma_atomic_flag;
     #define ma_atomic_flag_test_and_set_explicit(ptr, order)        (ma_bool32)ma_atomic_test_and_set_explicit_8(ptr, order)
     #define ma_atomic_flag_clear_explicit(ptr, order)               ma_atomic_clear_explicit_8(ptr, order)
-    #define c89atoimc_flag_load_explicit(ptr, order)                ma_atomic_load_explicit_8(ptr, order)
+    #define ma_atomic_flag_load_explicit(ptr, order)                ma_atomic_load_explicit_8(ptr, order)
 #endif
 #if !defined(MA_ATOMIC_HAS_NATIVE_COMPARE_EXCHANGE)
     #if defined(MA_ATOMIC_HAS_8)
@@ -15921,7 +15924,7 @@ static MA_INLINE void ma_atomic_spinlock_lock(volatile ma_atomic_spinlock* pSpin
         if (ma_atomic_flag_test_and_set_explicit(pSpinlock, ma_atomic_memory_order_acquire) == 0) {
             break;
         }
-        while (c89atoimc_flag_load_explicit(pSpinlock, ma_atomic_memory_order_relaxed) == 1) {
+        while (ma_atomic_flag_load_explicit(pSpinlock, ma_atomic_memory_order_relaxed) == 1) {
         }
     }
 }
@@ -15936,7 +15939,7 @@ static MA_INLINE void ma_atomic_spinlock_unlock(volatile ma_atomic_spinlock* pSp
 }
 #endif
 #endif
-/* ma_atomic.h end */
+/* c89atomic.h end */
 
 #define MA_ATOMIC_SAFE_TYPE_IMPL(c89TypeExtension, type) \
     static MA_INLINE ma_##type ma_atomic_##type##_get(ma_atomic_##type* x) \
@@ -18462,7 +18465,6 @@ typedef LONG    (WINAPI * MA_PFN_RegOpenKeyExA)(HKEY hKey, const char* lpSubKey,
 typedef LONG    (WINAPI * MA_PFN_RegCloseKey)(HKEY hKey);
 typedef LONG    (WINAPI * MA_PFN_RegQueryValueExA)(HKEY hKey, const char* lpValueName, DWORD* lpReserved, DWORD* lpType, BYTE* lpData, DWORD* lpcbData);
 #endif  /* MA_WIN32_DESKTOP */
-
 
 MA_API size_t ma_strlen_WCHAR(const WCHAR* str)
 {
@@ -34196,7 +34198,7 @@ static ma_result ma_device_init_internal__coreaudio(ma_context* pContext, ma_dev
     OSStatus status;
     UInt32 enableIOFlag;
     AudioStreamBasicDescription bestFormat;
-    UInt32 actualPeriodSizeInFrames;
+    ma_uint32 actualPeriodSizeInFrames;
     AURenderCallbackStruct callbackInfo;
 #if defined(MA_APPLE_DESKTOP)
     AudioObjectID deviceObjectID;
@@ -37734,7 +37736,9 @@ static ma_aaudio_data_callback_result_t ma_stream_data_callback_capture__aaudio(
     ma_device* pDevice = (ma_device*)pUserData;
     MA_ASSERT(pDevice != NULL);
 
-    ma_device_handle_backend_data_callback(pDevice, NULL, pAudioData, frameCount);
+    if (frameCount > 0) {
+        ma_device_handle_backend_data_callback(pDevice, NULL, pAudioData, (ma_uint32)frameCount);
+    }
 
     (void)pStream;
     return MA_AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -37745,7 +37749,14 @@ static ma_aaudio_data_callback_result_t ma_stream_data_callback_playback__aaudio
     ma_device* pDevice = (ma_device*)pUserData;
     MA_ASSERT(pDevice != NULL);
 
-    ma_device_handle_backend_data_callback(pDevice, pAudioData, NULL, frameCount);
+    /*
+    I've had a report that AAudio can sometimes post a frame count of 0. We need to check for that here
+    so we don't get any errors at a deeper level. I'm doing the same with the capture side for safety,
+    though I've not yet had any reports about that one.
+    */
+    if (frameCount > 0) {
+        ma_device_handle_backend_data_callback(pDevice, pAudioData, NULL, (ma_uint32)frameCount);
+    }
 
     (void)pStream;
     return MA_AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -42630,6 +42641,15 @@ MA_API ma_result ma_device_handle_backend_data_callback(ma_device* pDevice, void
     }
 
     if (pOutput == NULL && pInput == NULL) {
+        return MA_INVALID_ARGS;
+    }
+
+    /*
+    There is an assert deeper in the code that checks that frameCount > 0. Since this is a public facing
+    API we'll need to check for that here. I've had reports that AAudio can sometimes post a frame count
+    of 0.
+    */
+    if (frameCount == 0) {
         return MA_INVALID_ARGS;
     }
 
@@ -59885,7 +59905,7 @@ extern "C" {
 #define MA_DR_WAV_XSTRINGIFY(x)     MA_DR_WAV_STRINGIFY(x)
 #define MA_DR_WAV_VERSION_MAJOR     0
 #define MA_DR_WAV_VERSION_MINOR     13
-#define MA_DR_WAV_VERSION_REVISION  16
+#define MA_DR_WAV_VERSION_REVISION  17
 #define MA_DR_WAV_VERSION_STRING    MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_MAJOR) "." MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_MINOR) "." MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_REVISION)
 #include <stddef.h>
 #define MA_DR_WAVE_FORMAT_PCM          0x1
@@ -60754,7 +60774,7 @@ MA_API ma_decoder_config ma_decoder_config_init(ma_format outputFormat, ma_uint3
     return config;
 }
 
-MA_API ma_decoder_config ma_decoder_config_init_default()
+MA_API ma_decoder_config ma_decoder_config_init_default(void)
 {
     return ma_decoder_config_init(ma_format_unknown, 0, 0);
 }
@@ -80663,6 +80683,12 @@ MA_API ma_uint64 ma_dr_wav_write_pcm_frames(ma_dr_wav* pWav, ma_uint64 framesToW
 MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_uint64 framesToRead, ma_int16* pBufferOut)
 {
     ma_uint64 totalFramesRead = 0;
+    static ma_int32 adaptationTable[] = {
+        230, 230, 230, 230, 307, 409, 512, 614,
+        768, 614, 512, 409, 307, 230, 230, 230
+    };
+    static ma_int32 coeff1Table[] = { 256, 512, 0, 192, 240, 460,  392 };
+    static ma_int32 coeff2Table[] = { 0,  -256, 0, 64,  0,  -208, -232 };
     MA_DR_WAV_ASSERT(pWav != NULL);
     MA_DR_WAV_ASSERT(framesToRead > 0);
     while (pWav->readCursorInPCMFrames < pWav->totalPCMFrameCount) {
@@ -80681,6 +80707,9 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_
                 pWav->msadpcm.cachedFrames[2]  = pWav->msadpcm.prevFrames[0][0];
                 pWav->msadpcm.cachedFrames[3]  = pWav->msadpcm.prevFrames[0][1];
                 pWav->msadpcm.cachedFrameCount = 2;
+                if (pWav->msadpcm.predictor[0] >= ma_dr_wav_countof(coeff1Table)) {
+                    return totalFramesRead;
+                }
             } else {
                 ma_uint8 header[14];
                 if (pWav->onRead(pWav->pUserData, header, sizeof(header)) != sizeof(header)) {
@@ -80700,6 +80729,9 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_
                 pWav->msadpcm.cachedFrames[2] = pWav->msadpcm.prevFrames[0][1];
                 pWav->msadpcm.cachedFrames[3] = pWav->msadpcm.prevFrames[1][1];
                 pWav->msadpcm.cachedFrameCount = 2;
+                if (pWav->msadpcm.predictor[0] >= ma_dr_wav_countof(coeff1Table) || pWav->msadpcm.predictor[1] >= ma_dr_wav_countof(coeff2Table)) {
+                    return totalFramesRead;
+                }
             }
         }
         while (framesToRead > 0 && pWav->msadpcm.cachedFrameCount > 0 && pWav->readCursorInPCMFrames < pWav->totalPCMFrameCount) {
@@ -80722,12 +80754,6 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_
             if (pWav->msadpcm.bytesRemainingInBlock == 0) {
                 continue;
             } else {
-                static ma_int32 adaptationTable[] = {
-                    230, 230, 230, 230, 307, 409, 512, 614,
-                    768, 614, 512, 409, 307, 230, 230, 230
-                };
-                static ma_int32 coeff1Table[] = { 256, 512, 0, 192, 240, 460,  392 };
-                static ma_int32 coeff2Table[] = { 0,  -256, 0, 64,  0,  -208, -232 };
                 ma_uint8 nibbles;
                 ma_int32 nibble0;
                 ma_int32 nibble1;
