@@ -7107,6 +7107,7 @@ struct ma_device_config
     {
         const char* pStreamNamePlayback;
         const char* pStreamNameCapture;
+        int channelMap;
     } pulse;
     struct
     {
@@ -8754,6 +8755,9 @@ then be set directly on the structure. Below are the members of the `ma_device_c
 
     pulse.pStreamNameCapture
         PulseAudio only. Sets the stream name for capture.
+
+    pulse.channelMap
+        PulseAudio only. Sets the channel map that is requested from PulseAudio. See MA_PA_CHANNEL_MAP_* constants. Defaults to MA_PA_CHANNEL_MAP_AIFF.
 
     coreaudio.allowNominalSampleRateChange
         Core Audio only. Desktop only. When enabled, allows the sample rate of the device to be changed at the operating system level. This
@@ -14874,14 +14878,18 @@ typedef int ma_atomic_memory_order;
         __atomic_compare_exchange_n(dst, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
         return expected;
     }
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Watomic-alignment"
+    #if defined(__clang__)
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Watomic-alignment"
+    #endif
     static MA_INLINE ma_uint64 ma_atomic_compare_and_swap_64(volatile ma_uint64* dst, ma_uint64 expected, ma_uint64 desired)
     {
         __atomic_compare_exchange_n(dst, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
         return expected;
     }
-    #pragma clang diagnostic pop
+    #if defined(__clang__)
+        #pragma clang diagnostic pop
+    #endif
     typedef ma_uint8 ma_atomic_flag;
     #define ma_atomic_flag_test_and_set_explicit(dst, order)        (ma_bool32)__atomic_test_and_set(dst, order)
     #define ma_atomic_flag_clear_explicit(dst, order)               __atomic_clear(dst, order)
@@ -30487,7 +30495,7 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
         }
 
         /* Use a default channel map. */
-        ((ma_pa_channel_map_init_extend_proc)pDevice->pContext->pulse.pa_channel_map_init_extend)(&cmap, ss.channels, MA_PA_CHANNEL_MAP_DEFAULT);
+        ((ma_pa_channel_map_init_extend_proc)pDevice->pContext->pulse.pa_channel_map_init_extend)(&cmap, ss.channels, pConfig->pulse.channelMap);
 
         /* Use the requested sample rate if one was specified. */
         if (pDescriptorCapture->sampleRate != 0) {
@@ -30639,7 +30647,7 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
         }
 
         /* Use a default channel map. */
-        ((ma_pa_channel_map_init_extend_proc)pDevice->pContext->pulse.pa_channel_map_init_extend)(&cmap, ss.channels, MA_PA_CHANNEL_MAP_DEFAULT);
+        ((ma_pa_channel_map_init_extend_proc)pDevice->pContext->pulse.pa_channel_map_init_extend)(&cmap, ss.channels, pConfig->pulse.channelMap);
 
 
         /* Use the requested sample rate if one was specified. */
