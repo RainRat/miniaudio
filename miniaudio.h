@@ -2899,7 +2899,7 @@ like the following:
         ma_resample_algorithm_linear);
 
     ma_resampler resampler;
-    ma_result result = ma_resampler_init(&config, &resampler);
+    ma_result result = ma_resampler_init(&config, NULL, &resampler);
     if (result != MA_SUCCESS) {
         // An error occurred...
     }
@@ -7129,6 +7129,7 @@ struct ma_device_config
         ma_aaudio_allowed_capture_policy allowedCapturePolicy;
         ma_bool32 noAutoStartAfterReroute;
         ma_bool32 enableCompatibilityWorkarounds;
+        ma_bool32 allowSetBufferCapacity;
     } aaudio;
 };
 
@@ -16253,7 +16254,7 @@ static void ma_thread_wait__posix(ma_thread* pThread)
 static ma_result ma_mutex_init__posix(ma_mutex* pMutex)
 {
     int result;
-    
+
     if (pMutex == NULL) {
         return MA_INVALID_ARGS;
     }
@@ -37745,9 +37746,7 @@ static void ma_stream_error_callback__aaudio(ma_AAudioStream* pStream, void* pUs
     MA_ASSERT(pDevice != NULL);
 
     (void)error;
-
     ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[AAudio] ERROR CALLBACK: error=%d, AAudioStream_getState()=%d\n", error, ((MA_PFN_AAudioStream_getState)pDevice->pContext->aaudio.AAudioStream_getState)(pStream));
-
     /*
     When we get an error, we'll assume that the stream is in an erroneous state and needs to be restarted. From the documentation,
     we cannot do this from the error callback. Therefore we are going to use an event thread for the AAudio backend to do this
@@ -37848,12 +37847,13 @@ static ma_result ma_create_and_configure_AAudioStreamBuilder__aaudio(ma_context*
 
 
         /*
-        There have been reports where setting the frames per data callback results in an error
-        later on from Android. To address this, I'm experimenting with simply not setting it on
-        anything from Android 11 and earlier. Suggestions welcome on how we might be able to make
-        this more targeted.
+        There have been reports where setting the frames per data callback results in an error.
+        In particular, re-routing may inadvertently switch from low-latency mode, resulting in a less stable
+        stream from the legacy path (AudioStreamLegacy). To address this, we simply don't set the value. It
+        can still be set if it's explicitly requested via the aaudio.allowSetBufferCapacity variable in the
+        device config.
         */
-        if (!pConfig->aaudio.enableCompatibilityWorkarounds || ma_android_sdk_version() > 30) {
+        if ((!pConfig->aaudio.enableCompatibilityWorkarounds || ma_android_sdk_version() > 30) && pConfig->aaudio.allowSetBufferCapacity) {
             /*
             AAudio is annoying when it comes to its buffer calculation stuff because it doesn't let you
             retrieve the actual sample rate until after you've opened the stream. But you need to configure
@@ -37889,7 +37889,11 @@ static ma_result ma_create_and_configure_AAudioStreamBuilder__aaudio(ma_context*
             ((MA_PFN_AAudioStreamBuilder_setDataCallback)pContext->aaudio.AAudioStreamBuilder_setDataCallback)(pBuilder, ma_stream_data_callback_playback__aaudio, (void*)pDevice);
         }
 
-        /* Not sure how this affects things, but since there's a mapping between miniaudio's performance profiles and AAudio's performance modes, let go ahead and set it. */
+        /*
+        If we set AAUDIO_PERFORMANCE_MODE_LOW_LATENCY, we allow for MMAP (non-legacy path).
+        Since there's a mapping between miniaudio's performance profiles and AAudio's performance modes, let's use it.
+        Beware though, with a conservative performance profile, AAudio will indeed take the legacy path.
+        */
         ((MA_PFN_AAudioStreamBuilder_setPerformanceMode)pContext->aaudio.AAudioStreamBuilder_setPerformanceMode)(pBuilder, (pConfig->performanceProfile == ma_performance_profile_low_latency) ? MA_AAUDIO_PERFORMANCE_MODE_LOW_LATENCY : MA_AAUDIO_PERFORMANCE_MODE_NONE);
 
         /* We need to set an error callback to detect device changes. */
@@ -37925,6 +37929,9 @@ static ma_result ma_open_stream_basic__aaudio(ma_context* pContext, const ma_dev
         return result;
     }
 
+    /* Let's give AAudio a hint to avoid the legacy path (AudioStreamLegacy). */
+    ((MA_PFN_AAudioStreamBuilder_setPerformanceMode)pContext->aaudio.AAudioStreamBuilder_setPerformanceMode)(pBuilder, MA_AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+
     return ma_open_stream_and_close_builder__aaudio(pContext, pBuilder, ppStream);
 }
 
@@ -37949,6 +37956,10 @@ static ma_result ma_open_stream__aaudio(ma_device* pDevice, const ma_device_conf
 
 static ma_result ma_close_stream__aaudio(ma_context* pContext, ma_AAudioStream* pStream)
 {
+    if (pStream == NULL) {
+        return MA_INVALID_ARGS;
+    }
+
     return ma_result_from_aaudio(((MA_PFN_AAudioStream_close)pContext->aaudio.AAudioStream_close)(pStream));
 }
 
@@ -38080,11 +38091,12 @@ static ma_result ma_device_uninit__aaudio(ma_device* pDevice)
 {
     MA_ASSERT(pDevice != NULL);
 
+    /* When re-routing, streams may have been closed and never re-opened. Hence the extra checks below. */
+
     if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
         ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamCapture);
         pDevice->aaudio.pStreamCapture = NULL;
     }
-
     if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
         ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamPlayback);
         pDevice->aaudio.pStreamPlayback = NULL;
@@ -38180,6 +38192,10 @@ static ma_result ma_device_start_stream__aaudio(ma_device* pDevice, ma_AAudioStr
 
     MA_ASSERT(pDevice != NULL);
 
+    if (pStream == NULL) {
+        return MA_INVALID_ARGS;
+    }
+
     resultAA = ((MA_PFN_AAudioStream_requestStart)pDevice->pContext->aaudio.AAudioStream_requestStart)(pStream);
     if (resultAA != MA_AAUDIO_OK) {
         return ma_result_from_aaudio(resultAA);
@@ -38211,6 +38227,10 @@ static ma_result ma_device_stop_stream__aaudio(ma_device* pDevice, ma_AAudioStre
     ma_aaudio_stream_state_t currentState;
 
     MA_ASSERT(pDevice != NULL);
+
+    if (pStream == NULL) {
+        return MA_INVALID_ARGS;
+    }
 
     /*
     From the AAudio documentation:
@@ -38297,9 +38317,11 @@ static ma_result ma_device_stop__aaudio(ma_device* pDevice)
 static ma_result ma_device_reinit__aaudio(ma_device* pDevice, ma_device_type deviceType)
 {
     ma_result result;
+    int32_t retries = 0;
 
     MA_ASSERT(pDevice != NULL);
 
+error_disconnected:
     /* The first thing to do is close the streams. */
     if (deviceType == ma_device_type_capture || deviceType == ma_device_type_duplex) {
         ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamCapture);
@@ -38363,11 +38385,13 @@ static ma_result ma_device_reinit__aaudio(ma_device* pDevice, ma_device_type dev
 
         result = ma_device_init__aaudio(pDevice, &deviceConfig, &descriptorPlayback, &descriptorCapture);
         if (result != MA_SUCCESS) {
+            ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_WARNING, "[AAudio] Failed to create stream after route change.");
             return result;
         }
 
         result = ma_device_post_init(pDevice, deviceType, &descriptorPlayback, &descriptorCapture);
         if (result != MA_SUCCESS) {
+            ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_WARNING, "[AAudio] Failed to initialize device after route change.");
             ma_device_uninit__aaudio(pDevice);
             return result;
         }
@@ -38378,7 +38402,17 @@ static ma_result ma_device_reinit__aaudio(ma_device* pDevice, ma_device_type dev
         /* If the device is started, start the streams. Maybe make this configurable? */
         if (ma_device_get_state(pDevice) == ma_device_state_started) {
             if (pDevice->aaudio.noAutoStartAfterReroute == MA_FALSE) {
-                ma_device_start__aaudio(pDevice);
+                result = ma_device_start__aaudio(pDevice);
+                if (result != MA_SUCCESS) {
+                    /* We got disconnected! Retry a few times, until we find a connected device! */
+                    retries += 1;
+                    if (retries <= 3) {
+                        ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[AAudio] Failed to start stream after route change, retrying(%d)", retries);
+                        goto error_disconnected;
+                    }
+                    ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[AAudio] Failed to start stream after route change.");
+                    return result;
+                }
             } else {
                 ma_device_stop(pDevice);    /* Do a full device stop so we set internal state correctly. */
             }
@@ -38517,6 +38551,7 @@ static ma_result ma_context_init__aaudio(ma_context* pContext, const ma_context_
 
 static ma_result ma_job_process__device__aaudio_reroute(ma_job* pJob)
 {
+    ma_result result;
     ma_device* pDevice;
 
     MA_ASSERT(pJob != NULL);
@@ -38525,7 +38560,18 @@ static ma_result ma_job_process__device__aaudio_reroute(ma_job* pJob)
     MA_ASSERT(pDevice != NULL);
 
     /* Here is where we need to reroute the device. To do this we need to uninitialize the stream and reinitialize it. */
-    return ma_device_reinit__aaudio(pDevice, (ma_device_type)pJob->data.device.aaudio.reroute.deviceType);
+    result = ma_device_reinit__aaudio(pDevice, (ma_device_type)pJob->data.device.aaudio.reroute.deviceType);
+    if (result != MA_SUCCESS) {
+        /*
+        Getting here means we failed to reroute the device. The best thing I can think of here is to
+        just stop the device.
+        */
+        ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[AAudio] Stopping device due to reroute failure.");
+        ma_device_stop(pDevice);
+        return result;
+    }
+
+    return MA_SUCCESS;
 }
 #else
 /* Getting here means there is no AAudio backend so we need a no-op job implementation. */
