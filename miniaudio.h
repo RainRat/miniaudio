@@ -6287,7 +6287,7 @@ Job Queue
 /*
 Slot Allocator
 --------------
-The idea of the slot allocator is for it to be used in conjunction with a fixed sized buffer. You use the slot allocator to allocator an index that can be used
+The idea of the slot allocator is for it to be used in conjunction with a fixed sized buffer. You use the slot allocator to allocate an index that can be used
 as the insertion point for an object.
 
 Slots are reference counted to help mitigate the ABA problem in the lock-free queue we use for tracking jobs.
@@ -93226,7 +93226,7 @@ For more information, please refer to <http://unlicense.org/>
 ===============================================================================
 ALTERNATIVE 2 - MIT No Attribution
 ===============================================================================
-Copyright 2023 David Reid
+Copyright 2025 David Reid
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
