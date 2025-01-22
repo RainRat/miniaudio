@@ -5825,6 +5825,8 @@ MA_API void ma_data_source_uninit(ma_data_source* pDataSource);
 MA_API ma_result ma_data_source_read_pcm_frames(ma_data_source* pDataSource, void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead);   /* Must support pFramesOut = NULL in which case a forward seek should be performed. */
 MA_API ma_result ma_data_source_seek_pcm_frames(ma_data_source* pDataSource, ma_uint64 frameCount, ma_uint64* pFramesSeeked); /* Can only seek forward. Equivalent to ma_data_source_read_pcm_frames(pDataSource, NULL, frameCount, &framesRead); */
 MA_API ma_result ma_data_source_seek_to_pcm_frame(ma_data_source* pDataSource, ma_uint64 frameIndex);
+MA_API ma_result ma_data_source_seek_seconds(ma_data_source* pDataSource, float secondCount, float* pSecondsSeeked); /* Can only seek forward. Abstraction to ma_data_source_seek_pcm_frames() */
+MA_API ma_result ma_data_source_seek_to_second(ma_data_source* pDataSource, float seekPointInSeconds); /* Abstraction to ma_data_source_seek_to_pcm_frame() */
 MA_API ma_result ma_data_source_get_data_format(ma_data_source* pDataSource, ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate, ma_channel* pChannelMap, size_t channelMapCap);
 MA_API ma_result ma_data_source_get_cursor_in_pcm_frames(ma_data_source* pDataSource, ma_uint64* pCursor);
 MA_API ma_result ma_data_source_get_length_in_pcm_frames(ma_data_source* pDataSource, ma_uint64* pLength);    /* Returns MA_NOT_IMPLEMENTED if the length is unknown or cannot be determined. Decoders can return this. */
@@ -11393,6 +11395,7 @@ MA_API void ma_sound_set_looping(ma_sound* pSound, ma_bool32 isLooping);
 MA_API ma_bool32 ma_sound_is_looping(const ma_sound* pSound);
 MA_API ma_bool32 ma_sound_at_end(const ma_sound* pSound);
 MA_API ma_result ma_sound_seek_to_pcm_frame(ma_sound* pSound, ma_uint64 frameIndex); /* Just a wrapper around ma_data_source_seek_to_pcm_frame(). */
+MA_API ma_result ma_sound_seek_to_second(ma_sound* pSound, float seekPointInSeconds); /* Abstraction to ma_sound_seek_to_pcm_frame() */
 MA_API ma_result ma_sound_get_data_format(ma_sound* pSound, ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate, ma_channel* pChannelMap, size_t channelMapCap);
 MA_API ma_result ma_sound_get_cursor_in_pcm_frames(ma_sound* pSound, ma_uint64* pCursor);
 MA_API ma_result ma_sound_get_length_in_pcm_frames(ma_sound* pSound, ma_uint64* pLength);
@@ -57790,7 +57793,7 @@ MA_API ma_result ma_data_source_seek_to_pcm_frame(ma_data_source* pDataSource, m
     ma_data_source_base* pDataSourceBase = (ma_data_source_base*)pDataSource;
 
     if (pDataSourceBase == NULL) {
-        return MA_SUCCESS;
+        return MA_INVALID_ARGS;
     }
 
     if (pDataSourceBase->vtable->onSeek == NULL) {
@@ -57798,12 +57801,59 @@ MA_API ma_result ma_data_source_seek_to_pcm_frame(ma_data_source* pDataSource, m
     }
 
     if (frameIndex > pDataSourceBase->rangeEndInFrames) {
-        return MA_INVALID_OPERATION;    /* Trying to seek to far forward. */
+        return MA_INVALID_OPERATION;    /* Trying to seek too far forward. */
     }
 
     MA_ASSERT(pDataSourceBase->vtable != NULL);
 
     return pDataSourceBase->vtable->onSeek(pDataSource, pDataSourceBase->rangeBegInFrames + frameIndex);
+}
+
+MA_API ma_result ma_data_source_seek_seconds(ma_data_source* pDataSource, float secondCount, float* pSecondsSeeked)
+{
+    ma_uint64 frameCount;
+    ma_uint64 framesSeeked = 0;
+    ma_uint32 sampleRate;
+    ma_result result;
+
+    if (pDataSource == NULL) {
+        return MA_INVALID_ARGS;
+    }
+
+    result = ma_data_source_get_data_format(pDataSource, NULL, NULL, &sampleRate, NULL, 0);
+    if (result != MA_SUCCESS) {
+        return result;
+    }
+
+    /* We need PCM frames instead of seconds */
+    frameCount = (ma_uint64)(secondCount * sampleRate);
+
+    result = ma_data_source_seek_pcm_frames(pDataSource, frameCount, &framesSeeked);
+
+    /* VC6 doesn't support division between unsigned 64-bit integer and floating point number. Signed integer needed. This shouldn't affect anything in practice */
+    *pSecondsSeeked = (ma_int64)framesSeeked / (float)sampleRate;
+    return result;
+}
+
+MA_API ma_result ma_data_source_seek_to_second(ma_data_source* pDataSource, float seekPointInSeconds)
+{
+    ma_uint64 frameIndex;
+    ma_uint32 sampleRate;
+    ma_result result;
+
+    if (pDataSource == NULL) {
+        return MA_INVALID_ARGS;
+    }
+
+    result = ma_data_source_get_data_format(pDataSource, NULL, NULL, &sampleRate, NULL, 0);
+    if (result != MA_SUCCESS) {
+        return result;
+    }
+
+    /* We need PCM frames instead of seconds */
+    frameIndex = (ma_uint64)(seekPointInSeconds * sampleRate);
+
+    return ma_data_source_seek_to_pcm_frame(pDataSource, frameIndex);
 }
 
 MA_API ma_result ma_data_source_get_data_format(ma_data_source* pDataSource, ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate, ma_channel* pChannelMap, size_t channelMapCap)
@@ -77402,6 +77452,27 @@ MA_API ma_result ma_sound_seek_to_pcm_frame(ma_sound* pSound, ma_uint64 frameInd
     ma_atomic_exchange_64(&pSound->seekTarget, frameIndex);
 
     return MA_SUCCESS;
+}
+
+MA_API ma_result ma_sound_seek_to_second(ma_sound* pSound, float seekPointInSeconds)
+{
+    ma_uint64 frameIndex;
+    ma_uint32 sampleRate;
+    ma_result result;
+
+    if (pSound == NULL) {
+        return MA_INVALID_ARGS;
+    }
+
+    result = ma_sound_get_data_format(pSound, NULL, NULL, &sampleRate, NULL, 0);
+    if (result != MA_SUCCESS) {
+        return result;
+    }
+
+    /* We need PCM frames. We need to convert first */
+    frameIndex = (ma_uint64)(seekPointInSeconds * sampleRate);
+
+    return ma_sound_seek_to_pcm_frame(pSound, frameIndex);
 }
 
 MA_API ma_result ma_sound_get_data_format(ma_sound* pSound, ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate, ma_channel* pChannelMap, size_t channelMapCap)
