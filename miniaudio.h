@@ -12,15 +12,18 @@ GitHub:        https://github.com/mackron/miniaudio
 /*
 1. Introduction
 ===============
-miniaudio is a single file library for audio playback and capture. To use it, do the following in
-one .c file:
+To use miniaudio, include "miniaudio.h":
 
     ```c
-    #define MINIAUDIO_IMPLEMENTATION
     #include "miniaudio.h"
     ```
 
-You can do `#include "miniaudio.h"` in other parts of the program just like any other header.
+The implementation is contained in "miniaudio.c". Just compile this like any other source file. You
+can include miniaudio.c if you want to compile your project as a single translation unit:
+
+    ```c
+    #include "miniaudio.c"
+    ```
 
 miniaudio includes both low level and high level APIs. The low level API is good for those who want
 to do all of their mixing themselves and only require a light weight interface to the underlying
@@ -483,21 +486,12 @@ link the relevant frameworks but should compile cleanly out of the box with Xcod
 through the command line requires linking to `-lpthread` and `-lm`.
 
 Due to the way miniaudio links to frameworks at runtime, your application may not pass Apple's
-notarization process. To fix this there are two options. The first is to use the
-`MA_NO_RUNTIME_LINKING` option, like so:
-
-    ```c
-    #ifdef __APPLE__
-        #define MA_NO_RUNTIME_LINKING
-    #endif
-    #define MINIAUDIO_IMPLEMENTATION
-    #include "miniaudio.h"
-    ```
-
-This will require linking with `-framework CoreFoundation -framework CoreAudio -framework AudioToolbox`.
-If you get errors about AudioToolbox, try with `-framework AudioUnit` instead. You may get this when
-using older versions of iOS. Alternatively, if you would rather keep using runtime linking you can
-add the following to your entitlements.xcent file:
+notarization process. To fix this there are two options. The first is to compile with
+`-DMA_NO_RUNTIME_LINKING` which in turn will require linking with
+`-framework CoreFoundation -framework CoreAudio -framework AudioToolbox`. If you get errors about
+AudioToolbox, try with `-framework AudioUnit` instead. You may get this when using older versions
+of iOS. Alternatively, if you would rather keep using runtime linking you can add the following to
+your entitlements.xcent file:
 
     ```
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
@@ -30183,7 +30177,7 @@ static ma_pa_buffer_attr ma_device__pa_buffer_attr_new(ma_uint32 periodSizeInFra
 
 static ma_pa_stream* ma_device__pa_stream_new__pulse(ma_device* pDevice, const char* pStreamName, const ma_pa_sample_spec* ss, const ma_pa_channel_map* cmap)
 {
-    static int g_StreamCounter = 0;
+    static ma_atomic_uint32 g_StreamCounter = { 0 };
     char actualStreamName[256];
 
     if (pStreamName != NULL) {
@@ -30192,9 +30186,9 @@ static ma_pa_stream* ma_device__pa_stream_new__pulse(ma_device* pDevice, const c
         const char* pBaseName = "miniaudio:";
         size_t baseNameLen = strlen(pBaseName);
         ma_strcpy_s(actualStreamName, sizeof(actualStreamName), pBaseName);
-        ma_itoa_s(g_StreamCounter, actualStreamName + baseNameLen, sizeof(actualStreamName)-baseNameLen, 10);
+        ma_itoa_s((int)ma_atomic_uint32_get(&g_StreamCounter), actualStreamName + baseNameLen, sizeof(actualStreamName)-baseNameLen, 10);
     }
-    g_StreamCounter += 1;
+    ma_atomic_uint32_fetch_add(&g_StreamCounter, 1);
 
     return ((ma_pa_stream_new_proc)pDevice->pContext->pulse.pa_stream_new)((ma_pa_context*)pDevice->pulse.pPulseContext, actualStreamName, ss, cmap);
 }
@@ -56338,7 +56332,7 @@ MA_API const char* ma_channel_position_to_string(ma_channel channel)
         case MA_CHANNEL_LFE               : return "CHANNEL_LFE";
         case MA_CHANNEL_BACK_LEFT         : return "CHANNEL_BACK_LEFT";
         case MA_CHANNEL_BACK_RIGHT        : return "CHANNEL_BACK_RIGHT";
-        case MA_CHANNEL_FRONT_LEFT_CENTER : return "CHANNEL_FRONT_LEFT_CENTER ";
+        case MA_CHANNEL_FRONT_LEFT_CENTER : return "CHANNEL_FRONT_LEFT_CENTER";
         case MA_CHANNEL_FRONT_RIGHT_CENTER: return "CHANNEL_FRONT_RIGHT_CENTER";
         case MA_CHANNEL_BACK_CENTER       : return "CHANNEL_BACK_CENTER";
         case MA_CHANNEL_SIDE_LEFT         : return "CHANNEL_SIDE_LEFT";
@@ -64766,8 +64760,7 @@ MA_API ma_result ma_decoder_init_memory(const void* pData, size_t dataSize, cons
 #if defined(MA_HAS_WAV)    || \
     defined(MA_HAS_MP3)    || \
     defined(MA_HAS_FLAC)   || \
-    defined(MA_HAS_VORBIS) || \
-    defined(MA_HAS_OPUS)
+    defined(MA_HAS_VORBIS)
 #define MA_HAS_PATH_API
 #endif
 
@@ -75098,7 +75091,7 @@ static void ma_engine_node_process_pcm_frames__sound(ma_node* pNode, const float
                 ma_sound_set_at_end(pSound, MA_TRUE);   /* This will be set to false in ma_sound_start(). */
             }
 
-            pRunningFramesOut = ma_offset_pcm_frames_ptr_f32(ppFramesOut[0], totalFramesRead, ma_engine_get_channels(ma_sound_get_engine(pSound)));
+            pRunningFramesOut = ma_offset_pcm_frames_ptr_f32(ppFramesOut[0], totalFramesRead, ma_node_get_output_channels(pNode, 0));
 
             frameCountIn = (ma_uint32)framesJustRead;
             frameCountOut = framesRemaining;
