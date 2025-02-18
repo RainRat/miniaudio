@@ -1,52 +1,10 @@
-/* THIS HAS BEEN DEPRECATED! Use the libopus decoder in extras/decoders/libopus instead. */
+#ifndef miniaudio_libopus_c
+#define miniaudio_libopus_c
 
-/*
-This implements a data source that decodes Opus streams via libopus + libopusfile
+#include "miniaudio_libopus.h"
 
-This object can be plugged into any `ma_data_source_*()` API and can also be used as a custom
-decoding backend. See the custom_decoder example.
-
-You need to include this file after miniaudio.h.
-*/
-#ifndef miniaudio_libopus_h
-#define miniaudio_libopus_h
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#if !defined(MA_NO_LIBOPUS)
 #include <opusfile.h>
-#endif
-
-typedef struct
-{
-    ma_data_source_base ds;     /* The libopus decoder can be used independently as a data source. */
-    ma_read_proc onRead;
-    ma_seek_proc onSeek;
-    ma_tell_proc onTell;
-    void* pReadSeekTellUserData;
-    ma_format format;           /* Will be either f32 or s16. */
-#if !defined(MA_NO_LIBOPUS)
-    OggOpusFile* of;
-#endif
-} ma_libopus;
-
-MA_API ma_result ma_libopus_init(ma_read_proc onRead, ma_seek_proc onSeek, ma_tell_proc onTell, void* pReadSeekTellUserData, const ma_decoding_backend_config* pConfig, const ma_allocation_callbacks* pAllocationCallbacks, ma_libopus* pOpus);
-MA_API ma_result ma_libopus_init_file(const char* pFilePath, const ma_decoding_backend_config* pConfig, const ma_allocation_callbacks* pAllocationCallbacks, ma_libopus* pOpus);
-MA_API void ma_libopus_uninit(ma_libopus* pOpus, const ma_allocation_callbacks* pAllocationCallbacks);
-MA_API ma_result ma_libopus_read_pcm_frames(ma_libopus* pOpus, void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead);
-MA_API ma_result ma_libopus_seek_to_pcm_frame(ma_libopus* pOpus, ma_uint64 frameIndex);
-MA_API ma_result ma_libopus_get_data_format(ma_libopus* pOpus, ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate, ma_channel* pChannelMap, size_t channelMapCap);
-MA_API ma_result ma_libopus_get_cursor_in_pcm_frames(ma_libopus* pOpus, ma_uint64* pCursor);
-MA_API ma_result ma_libopus_get_length_in_pcm_frames(ma_libopus* pOpus, ma_uint64* pLength);
-
-#ifdef __cplusplus
-}
-#endif
-#endif
-
-#if defined(MINIAUDIO_IMPLEMENTATION) || defined(MA_IMPLEMENTATION)
+#include <string.h> /* For memset(). */
 
 static ma_result ma_libopus_ds_read(ma_data_source* pDataSource, void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead)
 {
@@ -79,7 +37,9 @@ static ma_data_source_vtable g_ma_libopus_ds_vtable =
     ma_libopus_ds_seek,
     ma_libopus_ds_get_data_format,
     ma_libopus_ds_get_cursor,
-    ma_libopus_ds_get_length
+    ma_libopus_ds_get_length,
+    NULL,   /* onSetLooping */
+    0       /* flags */
 };
 
 
@@ -149,7 +109,7 @@ static ma_result ma_libopus_init_internal(const ma_decoding_backend_config* pCon
         return MA_INVALID_ARGS;
     }
 
-    MA_ZERO_OBJECT(pOpus);
+    memset(pOpus, 0, sizeof(*pOpus));
     pOpus->format = ma_format_f32;    /* f32 by default. */
 
     if (pConfig != NULL && (pConfig->preferredFormat == ma_format_f32 || pConfig->preferredFormat == ma_format_s16)) {
@@ -256,7 +216,7 @@ MA_API void ma_libopus_uninit(ma_libopus* pOpus, const ma_allocation_callbacks* 
 
     #if !defined(MA_NO_LIBOPUS)
     {
-        op_free(pOpus->of);
+        op_free((OggOpusFile*)pOpus->of);
     }
     #else
     {
@@ -295,19 +255,19 @@ MA_API ma_result ma_libopus_read_pcm_frames(ma_libopus* pOpus, void* pFramesOut,
         totalFramesRead = 0;
         while (totalFramesRead < frameCount) {
             long libopusResult;
-            int framesToRead;
+            ma_uint64 framesToRead;
             ma_uint64 framesRemaining;
 
             framesRemaining = (frameCount - totalFramesRead);
             framesToRead = 1024;
             if (framesToRead > framesRemaining) {
-                framesToRead = (int)framesRemaining;
+                framesToRead = framesRemaining;
             }
 
             if (format == ma_format_f32) {
-                libopusResult = op_read_float(pOpus->of, (float*)ma_offset_pcm_frames_ptr(pFramesOut, totalFramesRead, format, channels), framesToRead * channels, NULL);
+                libopusResult = op_read_float((OggOpusFile*)pOpus->of, (float*     )ma_offset_pcm_frames_ptr(pFramesOut, totalFramesRead, format, channels), (int)(framesToRead * channels), NULL);
             } else {
-                libopusResult = op_read      (pOpus->of, (opus_int16*)ma_offset_pcm_frames_ptr(pFramesOut, totalFramesRead, format, channels), framesToRead * channels, NULL);
+                libopusResult = op_read      ((OggOpusFile*)pOpus->of, (opus_int16*)ma_offset_pcm_frames_ptr(pFramesOut, totalFramesRead, format, channels), (int)(framesToRead * channels), NULL);
             }
 
             if (libopusResult < 0) {
@@ -355,7 +315,7 @@ MA_API ma_result ma_libopus_seek_to_pcm_frame(ma_libopus* pOpus, ma_uint64 frame
 
     #if !defined(MA_NO_LIBOPUS)
     {
-        int libopusResult = op_pcm_seek(pOpus->of, (ogg_int64_t)frameIndex);
+        int libopusResult = op_pcm_seek((OggOpusFile*)pOpus->of, (ogg_int64_t)frameIndex);
         if (libopusResult != 0) {
             if (libopusResult == OP_ENOSEEK) {
                 return MA_INVALID_OPERATION;    /* Not seekable. */
@@ -393,7 +353,7 @@ MA_API ma_result ma_libopus_get_data_format(ma_libopus* pOpus, ma_format* pForma
         *pSampleRate = 0;
     }
     if (pChannelMap != NULL) {
-        MA_ZERO_MEMORY(pChannelMap, sizeof(*pChannelMap) * channelMapCap);
+        memset(pChannelMap, 0, sizeof(*pChannelMap) * channelMapCap);
     }
 
     if (pOpus == NULL) {
@@ -406,7 +366,7 @@ MA_API ma_result ma_libopus_get_data_format(ma_libopus* pOpus, ma_format* pForma
 
     #if !defined(MA_NO_LIBOPUS)
     {
-        ma_uint32 channels = op_channel_count(pOpus->of, -1);
+        ma_uint32 channels = op_channel_count((OggOpusFile*)pOpus->of, -1);
 
         if (pChannels != NULL) {
             *pChannels = channels;
@@ -445,7 +405,7 @@ MA_API ma_result ma_libopus_get_cursor_in_pcm_frames(ma_libopus* pOpus, ma_uint6
 
     #if !defined(MA_NO_LIBOPUS)
     {
-        ogg_int64_t offset = op_pcm_tell(pOpus->of);
+        ogg_int64_t offset = op_pcm_tell((OggOpusFile*)pOpus->of);
         if (offset < 0) {
             return MA_INVALID_FILE;
         }
@@ -477,7 +437,7 @@ MA_API ma_result ma_libopus_get_length_in_pcm_frames(ma_libopus* pOpus, ma_uint6
 
     #if !defined(MA_NO_LIBOPUS)
     {
-        ogg_int64_t length = op_pcm_total(pOpus->of, -1);
+        ogg_int64_t length = op_pcm_total((OggOpusFile*)pOpus->of, -1);
         if (length < 0) {
             return MA_ERROR;
         }
@@ -495,4 +455,4 @@ MA_API ma_result ma_libopus_get_length_in_pcm_frames(ma_libopus* pOpus, ma_uint6
     #endif
 }
 
-#endif
+#endif  /* miniaudio_libopus_c */
