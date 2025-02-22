@@ -1,4 +1,6 @@
 
+#include "../common/common.c"
+
 ma_result init_data_converter(ma_uint32 rateIn, ma_uint32 rateOut, ma_resample_algorithm algorithm, ma_data_converter* pDataConverter)
 {
     ma_result result;
@@ -176,7 +178,6 @@ ma_result test_data_converter__resampling_expected_output(void)
         return MA_SUCCESS;
     }
 }
-
 
 
 ma_result test_data_converter__resampling_required_input_fixed_interval(ma_data_converter* pDataConverter, ma_uint64 frameCountPerIteration)
@@ -376,4 +377,13 @@ int test_entry__data_converter(int argc, char** argv)
     } else {
         return 0;
     }
+}
+
+
+
+int main(int argc, char** argv)
+{
+    ma_register_test("Data Conversion", test_entry__data_converter);
+
+    return ma_run_tests(argc, argv);
 }
