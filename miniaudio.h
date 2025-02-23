@@ -7985,7 +7985,7 @@ struct ma_device
         {
             /*AAudioStream**/ ma_ptr pStreamPlayback;
             /*AAudioStream**/ ma_ptr pStreamCapture;
-            ma_mutex closeLock;
+            ma_mutex rerouteLock;
             ma_aaudio_usage usage;
             ma_aaudio_content_type contentType;
             ma_aaudio_input_preset inputPreset;
@@ -8408,6 +8408,10 @@ Retrieves basic information about every active playback and/or capture device.
 
 This function will allocate memory internally for the device lists and return a pointer to them through the `ppPlaybackDeviceInfos` and `ppCaptureDeviceInfos`
 parameters. If you do not want to incur the overhead of these allocations consider using `ma_context_enumerate_devices()` which will instead use a callback.
+
+Note that this only retrieves the ID and name/description of the device. The reason for only retrieving basic information is that it would otherwise require
+opening the backend device in order to probe it for more detailed information which can be inefficient. Consider using `ma_context_get_device_info()` for this,
+but don't call it from within the enumeration callback.
 
 
 Parameters
@@ -9955,7 +9959,7 @@ typedef struct
     ma_allocation_callbacks allocationCallbacks;
     ma_encoding_format encodingFormat;
     ma_uint32 seekPointCount;   /* When set to > 0, specifies the number of seek points to use for the generation of a seek table. Not all decoding backends support this. */
-    const ma_decoding_backend_vtable* const* ppCustomBackendVTables;
+    ma_decoding_backend_vtable** ppCustomBackendVTables;
     ma_uint32 customBackendCount;
     void* pCustomBackendUserData;
 } ma_decoder_config;
@@ -10482,7 +10486,7 @@ typedef struct
     ma_uint32 jobQueueCapacity;     /* The maximum number of jobs that can fit in the queue at a time. Defaults to MA_JOB_TYPE_RESOURCE_MANAGER_QUEUE_CAPACITY. Cannot be zero. */
     ma_uint32 flags;
     ma_vfs* pVFS;                   /* Can be NULL in which case defaults will be used. */
-    const ma_decoding_backend_vtable* const* ppCustomDecodingBackendVTables;
+    ma_decoding_backend_vtable** ppCustomDecodingBackendVTables;
     ma_uint32 customDecodingBackendCount;
     void* pCustomDecodingBackendUserData;
 } ma_resource_manager_config;
@@ -13928,7 +13932,7 @@ static ma_uint32 ma_ffs_32(ma_uint32 x)
 
     /* Just a naive implementation just to get things working for now. Will optimize this later. */
     for (i = 0; i < 32; i += 1) {
-        if ((x & (1 << i)) != 0) {
+        if ((x & (1U << i)) != 0) {
             return i;
         }
     }
@@ -17497,7 +17501,7 @@ static ma_job_proc g_jobVTable[MA_JOB_TYPE_COUNT] =
 
     /* Device. */
 #if !defined(MA_NO_DEVICE_IO)
-    ma_job_process__device__aaudio_reroute                      /*MA_JOB_TYPE_DEVICE_AAUDIO_REROUTE*/
+    ma_job_process__device__aaudio_reroute                      /* MA_JOB_TYPE_DEVICE_AAUDIO_REROUTE */
 #endif
 };
 
@@ -19039,9 +19043,7 @@ static void ma_device__read_frames_from_client(ma_device* pDevice, ma_uint32 fra
                     framesToReadThisIterationIn = requiredInputFrameCount;
                 }
 
-                if (framesToReadThisIterationIn > 0) {
-                    ma_device__handle_data_callback(pDevice, pIntermediaryBuffer, NULL, (ma_uint32)framesToReadThisIterationIn);
-                }
+                ma_device__handle_data_callback(pDevice, pIntermediaryBuffer, NULL, (ma_uint32)framesToReadThisIterationIn);
 
                 /*
                 At this point we have our decoded data in input format and now we need to convert to output format. Note that even if we didn't read any
@@ -28774,7 +28776,7 @@ static ma_result ma_context_init__alsa(ma_context* pContext, const ma_context_co
 
     return MA_SUCCESS;
 }
-#endif  /* ALSA */
+#endif  /* MA_HAS_ALSA */
 
 
 
@@ -31969,7 +31971,7 @@ static ma_result ma_context_init__jack(ma_context* pContext, const ma_context_co
 
     return MA_SUCCESS;
 }
-#endif  /* JACK */
+#endif  /* MA_HAS_JACK */
 
 
 
@@ -35214,7 +35216,7 @@ static ma_result ma_context_init__coreaudio(ma_context* pContext, const ma_conte
 
     return MA_SUCCESS;
 }
-#endif  /* Core Audio */
+#endif  /* MA_HAS_COREAUDIO */
 
 
 
@@ -36061,7 +36063,7 @@ static ma_result ma_context_init__sndio(ma_context* pContext, const ma_context_c
     (void)pConfig;
     return MA_SUCCESS;
 }
-#endif  /* sndio */
+#endif  /* MA_HAS_SNDIO */
 
 
 
@@ -36959,7 +36961,7 @@ static ma_result ma_context_init__audio4(ma_context* pContext, const ma_context_
 
     return MA_SUCCESS;
 }
-#endif  /* audio4 */
+#endif  /* MA_HAS_AUDIO4 */
 
 
 /******************************************************************************
@@ -37590,7 +37592,7 @@ static ma_result ma_context_init__oss(ma_context* pContext, const ma_context_con
 
     return MA_SUCCESS;
 }
-#endif  /* OSS */
+#endif  /* MA_HAS_OSS */
 
 
 
@@ -37901,20 +37903,12 @@ static ma_result ma_create_and_configure_AAudioStreamBuilder__aaudio(ma_context*
             ((MA_PFN_AAudioStreamBuilder_setSampleRate)pContext->aaudio.AAudioStreamBuilder_setSampleRate)(pBuilder, pDescriptor->sampleRate);
         }
 
-        if (deviceType == ma_device_type_capture) {
-            if (pDescriptor->channels != 0) {
-                ((MA_PFN_AAudioStreamBuilder_setChannelCount)pContext->aaudio.AAudioStreamBuilder_setChannelCount)(pBuilder, pDescriptor->channels);
-            }
-            if (pDescriptor->format != ma_format_unknown) {
-                ((MA_PFN_AAudioStreamBuilder_setFormat)pContext->aaudio.AAudioStreamBuilder_setFormat)(pBuilder, (pDescriptor->format == ma_format_s16) ? MA_AAUDIO_FORMAT_PCM_I16 : MA_AAUDIO_FORMAT_PCM_FLOAT);
-            }
-        } else {
-            if (pDescriptor->channels != 0) {
-                ((MA_PFN_AAudioStreamBuilder_setChannelCount)pContext->aaudio.AAudioStreamBuilder_setChannelCount)(pBuilder, pDescriptor->channels);
-            }
-            if (pDescriptor->format != ma_format_unknown) {
-                ((MA_PFN_AAudioStreamBuilder_setFormat)pContext->aaudio.AAudioStreamBuilder_setFormat)(pBuilder, (pDescriptor->format == ma_format_s16) ? MA_AAUDIO_FORMAT_PCM_I16 : MA_AAUDIO_FORMAT_PCM_FLOAT);
-            }
+        if (pDescriptor->channels != 0) {
+            ((MA_PFN_AAudioStreamBuilder_setChannelCount)pContext->aaudio.AAudioStreamBuilder_setChannelCount)(pBuilder, pDescriptor->channels);
+        }
+
+        if (pDescriptor->format != ma_format_unknown) {
+            ((MA_PFN_AAudioStreamBuilder_setFormat)pContext->aaudio.AAudioStreamBuilder_setFormat)(pBuilder, (pDescriptor->format == ma_format_s16) ? MA_AAUDIO_FORMAT_PCM_I16 : MA_AAUDIO_FORMAT_PCM_FLOAT);
         }
 
 
@@ -38162,19 +38156,15 @@ static ma_result ma_close_streams__aaudio(ma_device* pDevice)
 {
     MA_ASSERT(pDevice != NULL);
 
-    ma_mutex_lock(&pDevice->aaudio.closeLock);
-    {
-        /* When re-routing, streams may have been closed and never re-opened. Hence the extra checks below. */
-        if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
-            ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamCapture);
-            pDevice->aaudio.pStreamCapture = NULL;
-        }
-        if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
-            ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamPlayback);
-            pDevice->aaudio.pStreamPlayback = NULL;
-        }
+    /* When re-routing, streams may have been closed and never re-opened. Hence the extra checks below. */
+    if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
+        ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamCapture);
+        pDevice->aaudio.pStreamCapture = NULL;
     }
-    ma_mutex_unlock(&pDevice->aaudio.closeLock);
+    if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
+        ma_close_stream__aaudio(pDevice->pContext, (ma_AAudioStream*)pDevice->aaudio.pStreamPlayback);
+        pDevice->aaudio.pStreamPlayback = NULL;
+    }
 
     return MA_SUCCESS;
 }
@@ -38183,8 +38173,15 @@ static ma_result ma_device_uninit__aaudio(ma_device* pDevice)
 {
     MA_ASSERT(pDevice != NULL);
 
-    ma_close_streams__aaudio(pDevice);
-    ma_mutex_uninit(&pDevice->aaudio.closeLock);
+    /* Wait for any rerouting to finish before attempting to close the streams. */
+    ma_mutex_lock(&pDevice->aaudio.rerouteLock);
+    {
+        ma_close_streams__aaudio(pDevice);
+    }
+    ma_mutex_unlock(&pDevice->aaudio.rerouteLock);
+
+    /* Destroy re-routing lock. */
+    ma_mutex_uninit(&pDevice->aaudio.rerouteLock);
 
     return MA_SUCCESS;
 }
@@ -38236,7 +38233,7 @@ static ma_result ma_device_init_by_type__aaudio(ma_device* pDevice, const ma_dev
     return MA_SUCCESS;
 }
 
-static ma_result ma_device_init__aaudio(ma_device* pDevice, const ma_device_config* pConfig, ma_device_descriptor* pDescriptorPlayback, ma_device_descriptor* pDescriptorCapture)
+static ma_result ma_device_init_streams__aaudio(ma_device* pDevice, const ma_device_config* pConfig, ma_device_descriptor* pDescriptorPlayback, ma_device_descriptor* pDescriptorCapture)
 {
     ma_result result;
 
@@ -38266,7 +38263,21 @@ static ma_result ma_device_init__aaudio(ma_device* pDevice, const ma_device_conf
         }
     }
 
-    result = ma_mutex_init(&pDevice->aaudio.closeLock);
+    return MA_SUCCESS;
+}
+
+static ma_result ma_device_init__aaudio(ma_device* pDevice, const ma_device_config* pConfig, ma_device_descriptor* pDescriptorPlayback, ma_device_descriptor* pDescriptorCapture)
+{
+    ma_result result;
+
+    MA_ASSERT(pDevice != NULL);
+
+    result = ma_device_init_streams__aaudio(pDevice, pConfig, pDescriptorPlayback, pDescriptorCapture);
+    if (result != MA_SUCCESS) {
+        return result;
+    }
+
+    result = ma_mutex_init(&pDevice->aaudio.rerouteLock);
     if (result != MA_SUCCESS) {
         return result;
     }
@@ -38410,12 +38421,16 @@ static ma_result ma_device_reinit__aaudio(ma_device* pDevice, ma_device_type dev
 
     MA_ASSERT(pDevice != NULL);
 
-error_disconnected:
-    /* The first thing to do is close the streams. */
-    ma_close_streams__aaudio(pDevice);
-
-    /* Now we need to reinitialize each streams. The hardest part with this is just filling output the config and descriptors. */
+    /*
+     TODO: Stop retrying if main thread is about to uninit device.
+    */
+    ma_mutex_lock(&pDevice->aaudio.rerouteLock);
     {
+error_disconnected:
+        /* The first thing to do is close the streams. */
+        ma_close_streams__aaudio(pDevice);
+
+        /* Now we need to reinitialize each streams. The hardest part with this is just filling output the config and descriptors. */
         ma_device_config deviceConfig;
         ma_device_descriptor descriptorPlayback;
         ma_device_descriptor descriptorCapture;
@@ -38464,17 +38479,17 @@ error_disconnected:
             descriptorPlayback.periodCount        = deviceConfig.periods;
         }
 
-        result = ma_device_init__aaudio(pDevice, &deviceConfig, &descriptorPlayback, &descriptorCapture);
+        result = ma_device_init_streams__aaudio(pDevice, &deviceConfig, &descriptorPlayback, &descriptorCapture);
         if (result != MA_SUCCESS) {
             ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_WARNING, "[AAudio] Failed to create stream after route change.");
-            return result;
+            goto done;
         }
 
         result = ma_device_post_init(pDevice, deviceType, &descriptorPlayback, &descriptorCapture);
         if (result != MA_SUCCESS) {
             ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_WARNING, "[AAudio] Failed to initialize device after route change.");
             ma_close_streams__aaudio(pDevice);
-            return result;
+            goto done;
         }
 
         /* We'll only ever do this in response to a reroute. */
@@ -38492,15 +38507,20 @@ error_disconnected:
                         goto error_disconnected;
                     }
                     ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[AAudio] Failed to start stream after route change.");
-                    return result;
+                    goto done;
                 }
             } else {
                 ma_device_stop(pDevice);    /* Do a full device stop so we set internal state correctly. */
             }
         }
-
-        return MA_SUCCESS;
+        
+        result = MA_SUCCESS;
     }
+done:
+    /* Re-routing done */
+    ma_mutex_unlock(&pDevice->aaudio.rerouteLock);
+
+    return result;
 }
 
 static ma_result ma_device_get_info__aaudio(ma_device* pDevice, ma_device_type type, ma_device_info* pDeviceInfo)
@@ -40888,7 +40908,7 @@ static ma_result ma_context_init__webaudio(ma_context* pContext, const ma_contex
 
     return MA_SUCCESS;
 }
-#endif  /* Web Audio */
+#endif  /* MA_HAS_WEBAUDIO */
 
 
 
@@ -52901,12 +52921,7 @@ static ma_channel_conversion_path ma_channel_map_get_conversion_path(const ma_ch
         ma_uint32 iChannelIn;
         ma_bool32 areAllChannelPositionsPresent = MA_TRUE;
         for (iChannelIn = 0; iChannelIn < channelsIn; ++iChannelIn) {
-            ma_bool32 isInputChannelPositionInOutput = MA_FALSE;
-            if (ma_channel_map_contains_channel_position(channelsOut, pChannelMapOut, ma_channel_map_get_channel(pChannelMapIn, channelsIn, iChannelIn))) {
-                isInputChannelPositionInOutput = MA_TRUE;
-                break;
-            }
-
+            ma_bool32 isInputChannelPositionInOutput = ma_channel_map_contains_channel_position(channelsOut, pChannelMapOut, ma_channel_map_get_channel(pChannelMapIn, channelsIn, iChannelIn));
             if (!isInputChannelPositionInOutput) {
                 areAllChannelPositionsPresent = MA_FALSE;
                 break;
@@ -56704,7 +56719,7 @@ MA_API ma_result ma_rb_commit_read(ma_rb* pRB, size_t sizeInBytes)
         newReadOffsetLoopFlag ^= 0x80000000;
     }
 
-    ma_atomic_exchange_32(&pRB->encodedReadOffset, ma_rb__construct_offset(newReadOffsetLoopFlag, newReadOffsetInBytes));
+    ma_atomic_exchange_32(&pRB->encodedReadOffset, ma_rb__construct_offset(newReadOffsetInBytes, newReadOffsetLoopFlag));
 
     return MA_SUCCESS;
 }
@@ -56786,7 +56801,7 @@ MA_API ma_result ma_rb_commit_write(ma_rb* pRB, size_t sizeInBytes)
         newWriteOffsetLoopFlag ^= 0x80000000;
     }
 
-    ma_atomic_exchange_32(&pRB->encodedWriteOffset, ma_rb__construct_offset(newWriteOffsetLoopFlag, newWriteOffsetInBytes));
+    ma_atomic_exchange_32(&pRB->encodedWriteOffset, ma_rb__construct_offset(newWriteOffsetInBytes, newWriteOffsetLoopFlag));
 
     return MA_SUCCESS;
 }
@@ -65732,8 +65747,17 @@ MA_API ma_result ma_decoder_read_pcm_frames(ma_decoder* pDecoder, void* pFramesO
 
                     if (requiredInputFrameCount > 0) {
                         result = ma_data_source_read_pcm_frames(pDecoder->pBackend, pIntermediaryBuffer, framesToReadThisIterationIn, &framesReadThisIterationIn);
+
+                        /*
+                        Note here that even if we've reached the end, we don't want to abort because there might be more output frames needing to be
+                        generated from cached input data, which might happen if resampling is being performed.
+                        */
+                        if (result != MA_SUCCESS && result != MA_AT_END) {
+                            break;
+                        }
                     } else {
                         framesReadThisIterationIn = 0;
+                        pIntermediaryBuffer[0] = 0; /* <-- This is just to silence a static analysis warning. */
                     }
 
                     /*
@@ -68829,7 +68853,7 @@ static ma_result ma_resource_manager_data_buffer_node_decode_next_page(ma_resour
             }
 
             result = ma_decoder_read_pcm_frames(pDecoder, pPage->pAudioData, framesToTryReading, &framesRead);
-            if (framesRead > 0) {
+            if (result == MA_SUCCESS && framesRead > 0) {
                 pPage->sizeInFrames = framesRead;
 
                 result = ma_paged_audio_buffer_data_append_page(&pDataBufferNode->data.backend.decodedPaged.data, pPage);
@@ -71298,6 +71322,7 @@ static ma_result ma_job_process__resource_manager__load_data_buffer(ma_job* pJob
         goto done;  /* <-- This will ensure the execution pointer is incremented. */
     } else {
         result = MA_SUCCESS;    /* <-- Make sure this is reset. */
+        (void)result;           /* <-- This is to suppress a static analysis diagnostic about "result" not being used. But for safety when I do future maintenance I don't want to delete that assignment. */
     }
 
     /* Try initializing the connector if we haven't already. */
