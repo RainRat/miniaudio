@@ -60321,7 +60321,7 @@ extern "C" {
 #define MA_DR_WAV_XSTRINGIFY(x)     MA_DR_WAV_STRINGIFY(x)
 #define MA_DR_WAV_VERSION_MAJOR     0
 #define MA_DR_WAV_VERSION_MINOR     13
-#define MA_DR_WAV_VERSION_REVISION  17
+#define MA_DR_WAV_VERSION_REVISION  18
 #define MA_DR_WAV_VERSION_STRING    MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_MAJOR) "." MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_MINOR) "." MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_REVISION)
 #include <stddef.h>
 #define MA_DR_WAVE_FORMAT_PCM          0x1
@@ -78058,7 +78058,7 @@ code below please report the bug to the respective repository for the relevant p
 ***************************************************************************************************************************************************************
 **************************************************************************************************************************************************************/
 #if !defined(MA_NO_WAV) && (!defined(MA_NO_DECODING) || !defined(MA_NO_ENCODING))
-#if !defined(MA_DR_WAV_IMPLEMENTATION) && !defined(MA_DR_WAV_IMPLEMENTATION) /* For backwards compatibility. Will be removed in version 0.11 for cleanliness. */
+#if !defined(MA_DR_WAV_IMPLEMENTATION)
 /* dr_wav_c begin */
 #ifndef ma_dr_wav_c
 #define ma_dr_wav_c
@@ -79648,7 +79648,9 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
                     compressionFormat = MA_DR_WAVE_FORMAT_MULAW;
                 } else if (ma_dr_wav_fourcc_equal(type, "ima4")) {
                     compressionFormat = MA_DR_WAVE_FORMAT_DVI_ADPCM;
-                    sampleSizeInBits = 4;
+                    sampleSizeInBits  = 4;
+                    (void)compressionFormat;
+                    (void)sampleSizeInBits;
                     return MA_FALSE;
                 } else {
                     return MA_FALSE;
@@ -82889,7 +82891,7 @@ MA_API ma_bool32 ma_dr_wav_fourcc_equal(const ma_uint8* a, const char* b)
 #endif  /* MA_NO_WAV */
 
 #if !defined(MA_NO_FLAC) && !defined(MA_NO_DECODING)
-#if !defined(MA_DR_FLAC_IMPLEMENTATION) && !defined(MA_DR_FLAC_IMPLEMENTATION) /* For backwards compatibility. Will be removed in version 0.11 for cleanliness. */
+#if !defined(MA_DR_FLAC_IMPLEMENTATION)
 /* dr_flac_c begin */
 #ifndef ma_dr_flac_c
 #define ma_dr_flac_c
@@ -90638,7 +90640,7 @@ MA_API ma_bool32 ma_dr_flac_next_cuesheet_track(ma_dr_flac_cuesheet_track_iterat
 #endif  /* MA_NO_FLAC */
 
 #if !defined(MA_NO_MP3) && !defined(MA_NO_DECODING)
-#if !defined(MA_DR_MP3_IMPLEMENTATION) && !defined(MA_DR_MP3_IMPLEMENTATION) /* For backwards compatibility. Will be removed in version 0.11 for cleanliness. */
+#if !defined(MA_DR_MP3_IMPLEMENTATION)
 /* dr_mp3_c begin */
 #ifndef ma_dr_mp3_c
 #define ma_dr_mp3_c
