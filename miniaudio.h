@@ -3969,7 +3969,7 @@ typedef ma_uint16 wchar_t;
         #define MA_NO_INLINE __attribute__((noinline))
     #else
         #define MA_INLINE MA_GNUC_INLINE_HINT
-        #define MA_NO_INLINE __attribute__((noinline))
+        #define MA_NO_INLINE
     #endif
 #elif defined(__WATCOMC__)
     #define MA_INLINE __inline
@@ -11549,6 +11549,7 @@ IMPLEMENTATION
 #if !defined(MA_WIN32)
 #include <sched.h>
 #include <sys/time.h>   /* select() (used for ma_sleep()). */
+#include <unistd.h>
 #include <pthread.h>
 #endif
 
@@ -11864,7 +11865,7 @@ static MA_INLINE ma_bool32 ma_has_neon(void)
 #endif
 
 #ifndef MA_RESTRICT
-    #if defined(__clang__) || defined(__GNUC__) || defined(_MSC_VER)
+    #if defined(__clang__) || defined(_MSC_VER) || (defined(__GNUC__) && (__GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)))
         #define MA_RESTRICT __restrict
     #else
         #define MA_RESTRICT
@@ -12000,7 +12001,7 @@ static MA_INLINE void ma_yield(void)
             #endif
         #endif
     #else
-        __asm__ __volatile__ ("pause");
+        __asm__ __volatile__ ("rep; nop");
     #endif
 #elif (defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7) || defined(_M_ARM64) || (defined(_M_ARM) && _M_ARM >= 7) || defined(__ARM_ARCH_6K__) || defined(__ARM_ARCH_6T2__)
     /* ARM */
@@ -13326,7 +13327,7 @@ MA_API ma_result ma_wfopen(FILE** ppFile, const wchar_t* pFilePath, const wchar_
 
 static MA_INLINE void ma_copy_memory_64(void* dst, const void* src, ma_uint64 sizeInBytes)
 {
-#if 0xFFFFFFFFFFFFFFFF <= MA_SIZE_MAX
+#if MA_SIZE_MAX > 0xFFFFFFFF
     MA_COPY_MEMORY(dst, src, (size_t)sizeInBytes);
 #else
     while (sizeInBytes > 0) {
@@ -13346,7 +13347,7 @@ static MA_INLINE void ma_copy_memory_64(void* dst, const void* src, ma_uint64 si
 
 static MA_INLINE void ma_zero_memory_64(void* dst, ma_uint64 sizeInBytes)
 {
-#if 0xFFFFFFFFFFFFFFFF <= MA_SIZE_MAX
+#if MA_SIZE_MAX > 0xFFFFFFFF
     MA_ZERO_MEMORY(dst, (size_t)sizeInBytes);
 #else
     while (sizeInBytes > 0) {
@@ -13477,7 +13478,11 @@ Logging
 **************************************************************************************************************************************************************/
 #ifndef ma_va_copy
     #if !defined(_MSC_VER) || _MSC_VER >= 1800
-        #define ma_va_copy(dst, src) va_copy((dst), (src))
+        #if (defined(__GNUC__) && __GNUC__ < 3)
+            #define ma_va_copy(dst, src) ((dst) = (src))    /* This is untested. Not sure if this is correct for old GCC. */
+        #else
+            #define ma_va_copy(dst, src) va_copy((dst), (src))
+        #endif
     #else
         #define ma_va_copy(dst, src) ((dst) = (src))
     #endif
@@ -13725,10 +13730,13 @@ MA_API ma_result ma_log_postv(ma_log* pLog, ma_uint32 level, const char* pFormat
         char* pFormattedMessageHeap = NULL;
         va_list args2;
 
-        ma_va_copy(args2, args);
-
         /* First try formatting into our fixed sized stack allocated buffer. If this is too small we'll fallback to a heap allocation. */
-        length = vsnprintf(pFormattedMessageStack, sizeof(pFormattedMessageStack), pFormat, args2);
+        ma_va_copy(args2, args);
+        {
+            length = vsnprintf(pFormattedMessageStack, sizeof(pFormattedMessageStack), pFormat, args2);
+        }
+        va_end(args2);
+
         if (length < 0) {
             return MA_INVALID_OPERATION;    /* An error occurred when trying to convert the buffer. */
         }
@@ -13770,8 +13778,9 @@ MA_API ma_result ma_log_postv(ma_log* pLog, ma_uint32 level, const char* pFormat
             va_list args2;
 
             ma_va_copy(args2, args);
-
-            formattedLen = ma_vscprintf(&pLog->allocationCallbacks, pFormat, args2);
+            {
+                formattedLen = ma_vscprintf(&pLog->allocationCallbacks, pFormat, args2);
+            }
             va_end(args2);
 
             if (formattedLen <= 0) {
@@ -16214,9 +16223,18 @@ static ma_result ma_thread_create__posix(ma_thread* pThread, ma_thread_priority 
         }
         #endif
 
-        if (stackSize > 0) {
-            pthread_attr_setstacksize(&attr, stackSize);
+        #if defined(_POSIX_THREAD_ATTR_STACKSIZE) && _POSIX_THREAD_ATTR_STACKSIZE >= 0
+        {
+            if (stackSize > 0) {
+                pthread_attr_setstacksize(&attr, stackSize);
+            }
         }
+        #else
+        {
+            (void)stackSize;  /* Suppress unused parameter warning. */
+        }
+        #endif
+        
 
         if (scheduler != -1) {
             int priorityMin = sched_get_priority_min(scheduler);
@@ -17453,10 +17471,12 @@ static MA_INLINE ma_uint16 ma_job_extract_slot(ma_uint64 toc)
     return (ma_uint16)(toc & 0x0000FFFF);
 }
 
+#if 0   /* Currently unused, but might make use of this later. */
 static MA_INLINE ma_uint16 ma_job_extract_code(ma_uint64 toc)
 {
     return (ma_uint16)((toc & 0xFFFF0000) >> 16);
 }
+#endif
 
 static MA_INLINE ma_uint64 ma_job_toc_to_allocation(ma_uint64 toc)
 {
@@ -18060,7 +18080,6 @@ DEVICE I/O
 
 #ifdef MA_POSIX
     #include <sys/types.h>
-    #include <unistd.h>
 
     /* No need for dlfcn.h if we're not using runtime linking. */
     #ifndef MA_NO_RUNTIME_LINKING
@@ -67978,6 +67997,7 @@ static MA_INLINE ma_resource_manager_data_buffer_node* ma_resource_manager_data_
     return ma_resource_manager_data_buffer_node_find_min(pDataBufferNode->pChildHi);
 }
 
+#if 0   /* Currently unused, but might make use of this later. */
 static MA_INLINE ma_resource_manager_data_buffer_node* ma_resource_manager_data_buffer_node_find_inorder_predecessor(ma_resource_manager_data_buffer_node* pDataBufferNode)
 {
     MA_ASSERT(pDataBufferNode           != NULL);
@@ -67985,6 +68005,7 @@ static MA_INLINE ma_resource_manager_data_buffer_node* ma_resource_manager_data_
 
     return ma_resource_manager_data_buffer_node_find_max(pDataBufferNode->pChildLo);
 }
+#endif
 
 static ma_result ma_resource_manager_data_buffer_node_remove(ma_resource_manager* pResourceManager, ma_resource_manager_data_buffer_node* pDataBufferNode)
 {
