@@ -3874,22 +3874,24 @@ typedef ma_uint16 wchar_t;
 #if !defined(_WIN32)    /* If it's not Win32, assume POSIX. */
     #define MA_POSIX
 
-    /*
-    Use the MA_NO_PTHREAD_IN_HEADER option at your own risk. This is intentionally undocumented.
-    You can use this to avoid including pthread.h in the header section. The downside is that it
-    results in some fixed sized structures being declared for the various types that are used in
-    miniaudio. The risk here is that these types might be too small for a given platform. This
-    risk is yours to take and no support will be offered if you enable this option.
-    */
-    #ifndef MA_NO_PTHREAD_IN_HEADER
-        #include <pthread.h>    /* Unfortunate #include, but needed for pthread_t, pthread_mutex_t and pthread_cond_t types. */
-        typedef pthread_t       ma_pthread_t;
-        typedef pthread_mutex_t ma_pthread_mutex_t;
-        typedef pthread_cond_t  ma_pthread_cond_t;
-    #else
-        typedef ma_uintptr      ma_pthread_t;
-        typedef union           ma_pthread_mutex_t { char __data[40]; ma_uint64 __alignment; } ma_pthread_mutex_t;
-        typedef union           ma_pthread_cond_t  { char __data[48]; ma_uint64 __alignment; } ma_pthread_cond_t;
+    #if !defined(MA_NO_THREADING)
+        /*
+        Use the MA_NO_PTHREAD_IN_HEADER option at your own risk. This is intentionally undocumented.
+        You can use this to avoid including pthread.h in the header section. The downside is that it
+        results in some fixed sized structures being declared for the various types that are used in
+        miniaudio. The risk here is that these types might be too small for a given platform. This
+        risk is yours to take and no support will be offered if you enable this option.
+        */
+        #ifndef MA_NO_PTHREAD_IN_HEADER
+            #include <pthread.h>    /* Unfortunate #include, but needed for pthread_t, pthread_mutex_t and pthread_cond_t types. */
+            typedef pthread_t       ma_pthread_t;
+            typedef pthread_mutex_t ma_pthread_mutex_t;
+            typedef pthread_cond_t  ma_pthread_cond_t;
+        #else
+            typedef ma_uintptr      ma_pthread_t;
+            typedef union           ma_pthread_mutex_t { char __data[40]; ma_uint64 __alignment; } ma_pthread_mutex_t;
+            typedef union           ma_pthread_cond_t  { char __data[48]; ma_uint64 __alignment; } ma_pthread_cond_t;
+        #endif
     #endif
 
     #if defined(__unix__)
@@ -11547,14 +11549,14 @@ IMPLEMENTATION
 #endif
 
 #if !defined(MA_WIN32)
-#include <sched.h>
-#include <sys/time.h>   /* select() (used for ma_sleep()). */
-#include <unistd.h>
-#include <pthread.h>
-#endif
+    #if !defined(MA_NO_THREADING)
+        #include <sched.h>
+        #include <pthread.h>     /* For pthreads. */
+    #endif
 
-#ifdef MA_NX
-#include <time.h>       /* For nanosleep() */
+    #include <sys/time.h>   /* select() (used for ma_sleep()). */
+    #include <time.h>       /* For nanosleep() */
+    #include <unistd.h> 
 #endif
 
 #include <sys/stat.h>   /* For fstat(), etc. */
@@ -70406,16 +70408,19 @@ static ma_result ma_resource_manager_data_buffer_node_acquire_critical_section(m
                 /* Failed to post job. Probably ran out of memory. */
                 ma_log_postf(ma_resource_manager_get_log(pResourceManager), MA_LOG_LEVEL_ERROR, "Failed to post MA_JOB_TYPE_RESOURCE_MANAGER_LOAD_DATA_BUFFER_NODE job. %s.\n", ma_result_description(result));
 
-                /*
-                Fences were acquired before posting the job, but since the job was not able to
-                be posted, we need to make sure we release them so nothing gets stuck waiting.
-                */
-                if (pInitFence != NULL) { ma_fence_release(pInitFence); }
-                if (pDoneFence != NULL) { ma_fence_release(pDoneFence); }
-
                 if ((flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_WAIT_INIT) != 0) {
                     ma_resource_manager_inline_notification_uninit(pInitNotification);
                 } else {
+                    /*
+                    Fences were acquired before posting the job, but since the job was not able to
+                    be posted, we need to make sure we release them so nothing gets stuck waiting.
+
+                    In the WAIT_INIT case, these will have already been released in ma_job_process()
+                    so we should only release fences in this branch.
+                    */
+                    if (pInitFence != NULL) { ma_fence_release(pInitFence); }
+                    if (pDoneFence != NULL) { ma_fence_release(pDoneFence); }
+
                     /* These will have been freed by the job thread, but with WAIT_INIT they will already have happened since the job has already been handled. */
                     ma_free(pFilePathCopy,  &pResourceManager->config.allocationCallbacks);
                     ma_free(pFilePathWCopy, &pResourceManager->config.allocationCallbacks);
