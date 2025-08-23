@@ -1,7 +1,16 @@
 cmake_minimum_required(VERSION 3.10)
-project(miniaudio
-    VERSION 0.11
-)
+
+# Extract version from miniaudio.h
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/miniaudio.h" MINIAUDIO_HEADER_CONTENTS)
+string(REGEX MATCH "#define MA_VERSION_MAJOR[ \t]+([0-9]+)" _major_match "${MINIAUDIO_HEADER_CONTENTS}")
+set(MA_VERSION_MAJOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "#define MA_VERSION_MINOR[ \t]+([0-9]+)" _minor_match "${MINIAUDIO_HEADER_CONTENTS}")
+set(MA_VERSION_MINOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "#define MA_VERSION_REVISION[ \t]+([0-9]+)" _revision_match "${MINIAUDIO_HEADER_CONTENTS}")
+set(MA_VERSION_REVISION "${CMAKE_MATCH_1}")
+set(MINIAUDIO_VERSION "${MA_VERSION_MAJOR}.${MA_VERSION_MINOR}.${MA_VERSION_REVISION}")
+
+project(miniaudio VERSION ${MINIAUDIO_VERSION})
 
 
 # Options
@@ -71,6 +80,20 @@ set(COMPILE_OPTIONS)
 # When installing any header that imports miniaudio.h from a relative path, we
 # need to maintain its place in the directory tree so it can find Miniaudio
 set(LIBS_TO_INSTALL)
+
+
+# Special rules for Emscripten.
+#
+# - MINIAUDIO_FORCE_C89 is not supported.
+# - MINIAUDIO_NO_RUNTIME_LINKING must be enabled.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(MINIAUDIO_FORCE_C89 OFF)
+    set(MINIAUDIO_NO_RUNTIME_LINKING ON)
+
+    # This is a hack to work around some errors relating to generation of the pkg-config file.
+    set(MINIAUDIO_ENABLE_ONLY_SPECIFIC_BACKENDS ON)
+    set(MINIAUDIO_ENABLE_WEBAUDIO ON)
+endif()
 
 
 if(MINIAUDIO_FORCE_CXX AND MINIAUDIO_FORCE_C89)
@@ -460,12 +483,12 @@ if (UNIX)
     
     find_library(LIB_PTHREAD NAMES pthread)
     if(LIB_PTHREAD)
-        list(APPEND COMMON_LINK_LIBRARIES pthread) # Some compilers will not link to pthread by default so list it here just in case.
+        list(APPEND COMMON_LINK_LIBRARIES ${LIB_PTHREAD}) # Some compilers will not link to pthread by default so list it here just in case.
     endif()
 
     find_library(LIB_M NAMES m)
     if(LIB_M)
-        list(APPEND COMMON_LINK_LIBRARIES m)
+        list(APPEND COMMON_LINK_LIBRARIES ${LIB_M})
     endif()
 
     # If we're compiling for 32-bit ARM we need to link to -latomic.
@@ -580,6 +603,98 @@ add_library(miniaudio_common_options INTERFACE)
 target_compile_options(miniaudio_common_options INTERFACE ${COMPILE_OPTIONS})
 target_link_libraries (miniaudio_common_options INTERFACE ${COMMON_LINK_LIBRARIES})
 
+function(is_backend_enabled NAME)
+    if (NOT MINIAUDIO_NO_${NAME} AND (NOT MINIAUDIO_ENABLE_ONLY_SPECIFIC_BACKENDS OR MINIAUDIO_ENABLE_${NAME}))
+        set(${NAME}_ENABLED TRUE PARENT_SCOPE)
+    else()
+        set(${NAME}_ENABLED FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+set(LINKED_LIBS)
+
+if(MINIAUDIO_NO_RUNTIME_LINKING)
+    is_backend_enabled(PULSEAUDIO)
+    if (PULSEAUDIO_ENABLED)
+        find_package(PulseAudio)
+
+        if (PulseAudio_FOUND)
+            target_link_libraries(miniaudio PRIVATE ${PULSEAUDIO_LIBRARY})
+            target_include_directories(miniaudio SYSTEM PRIVATE ${PULSEAUDIO_INCLUDE_DIR})
+            list(APPEND LINKED_LIBS libpulse)
+        endif()
+    endif()
+
+    is_backend_enabled(ALSA)
+    if (ALSA_ENABLED)
+        find_package(PkgConfig QUIET)
+
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(PC_ALSA alsa)
+        endif()
+
+        find_library(ALSA_LIBRARY
+            NAMES asound
+            HINTS ${PC_ALSA_LIBRARY_DIRS}
+        )
+
+        if (ALSA_LIBRARY)
+            find_path(ALSA_INCLUDE_DIR
+                NAMES alsa/asoundlib.h
+                HINTS ${PC_ALSA_INCLUDE_DIRS}
+            )
+
+            target_link_libraries(miniaudio PRIVATE ${ALSA_LIBRARY})
+            target_include_directories(miniaudio PRIVATE ${ALSA_INCLUDE_DIR})
+            list(APPEND LINKED_LIBS alsa)
+        endif()
+    endif()
+
+    is_backend_enabled(SNDIO)
+    if (SNDIO_ENABLED)
+        find_package(PkgConfig QUIET)
+
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(PC_SNDIO sndio)
+        endif()
+
+        find_library(SNDIO_LIBRARY
+            NAMES sndio
+            HINTS ${PC_SNDIO_LIBRARY_DIRS}
+        )
+
+        if (SNDIO_LIBRARY)
+            target_link_libraries(miniaudio PRIVATE ${SNDIO_LIBRARY})
+            list(APPEND LINKED_LIBS sndio)
+        endif()
+    endif()
+
+    is_backend_enabled(JACK)
+    if (JACK_ENABLED)
+        find_package(PkgConfig QUIET)
+
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(PC_JACK jack)
+        endif()
+
+        find_library(JACK_LIBRARY
+            NAMES jack
+            HINTS ${PC_JACK_LIBRARY_DIRS}
+        )
+
+        if (JACK_LIBRARY)
+            find_path(JACK_INCLUDE_DIR
+                NAMES jack/jack.h
+                HINTS ${PC_JACK_INCLUDE_DIRS}
+            )
+
+            target_link_libraries(miniaudio PRIVATE ${JACK_LIBRARY})
+            target_include_directories(miniaudio PRIVATE ${JACK_INCLUDE_DIR})
+            list(APPEND LINKED_LIBS jack)
+        endif()
+    endif()
+endif()
+
 # Tests
 #
 # All tests are compiled as a single translation unit. There is no need to add miniaudio as a link library.
@@ -691,6 +806,27 @@ if (MINIAUDIO_BUILD_EXAMPLES)
     add_miniaudio_example(miniaudio_simple_playback simple_playback.c)
     add_miniaudio_example(miniaudio_simple_spatialization simple_spatialization.c)
 endif()
+
+if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+    set(MINIAUDIO_PC_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+else()
+    set(MINIAUDIO_PC_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+endif()
+if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+    set(MINIAUDIO_PC_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+else()
+    set(MINIAUDIO_PC_LIBDIR "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")
+endif()
+
+string(JOIN ", " MINIAUDIO_PC_REQUIRES_PRIVATE ${LINKED_LIBS})
+list(TRANSFORM COMMON_LINK_LIBRARIES PREPEND "-l")
+string(JOIN " " MINIAUDIO_PC_LIBS_PRIVATE ${COMMON_LINK_LIBRARIES})
+list(TRANSFORM COMPILE_DEFINES PREPEND "-D")
+string(JOIN " " MINIAUDIO_PC_CFLAGS ${COMPILE_DEFINES})
+
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/miniaudio.pc.in" "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.pc" @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 
 message(STATUS "Library list: ${LIBS_TO_INSTALL}")
 install(TARGETS ${LIBS_TO_INSTALL}

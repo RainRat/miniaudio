@@ -4,12 +4,19 @@
 #include "fs.h"
 
 /* TODO: Remove this. To replicate errors, Just comment out this _XOPEN_SOURCE section and compile with `-std=c89` on GCC. */
-/* This is for `-std=c89` compatibility. Without this there will be a few pthread related issues as well as some stdio functions being unavailable. They will need workarounds. */
-#ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE   700
-#else
-    #if _XOPEN_SOURCE < 500
-    #error _XOPEN_SOURCE must be >= 500. fs is not usable.
+/*
+This is for `-std=c89` compatibility. Without this there will be a few pthread related issues as well as some stdio
+functions being unavailable. They will need workarounds.
+
+Note that this causes errors on Apple platforms, so we exclude Apple from this.
+*/
+#ifndef __APPLE__
+    #ifndef _XOPEN_SOURCE
+    #define _XOPEN_SOURCE   700
+    #else
+        #if _XOPEN_SOURCE < 500
+        #error _XOPEN_SOURCE must be >= 500. fs is not usable.
+        #endif
     #endif
 #endif
 
@@ -4908,7 +4915,7 @@ static fs_result fs_mkdir_stdio_win32(const char* pPath)
     int result;
 
     /* If it's a drive letter segment just pretend it's successful. */
-    if (pPath[0] >= 'a' && pPath[0] <= 'z' || pPath[0] >= 'A' && pPath[0] <= 'Z') {
+    if ((pPath[0] >= 'a' && pPath[0] <= 'z') || (pPath[0] >= 'A' && pPath[0] <= 'Z')) {
         if (pPath[1] == ':' && pPath[2] == '\0') {
             return FS_SUCCESS;
         }
