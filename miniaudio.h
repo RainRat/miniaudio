@@ -19358,7 +19358,7 @@ MA_API ma_handle ma_dlopen(ma_log* pLog, const char* filename)
             #else
                 /* *sigh* It appears there is no ANSI version of LoadPackagedLibrary()... */
                 WCHAR filenameW[4096];
-                if (MultiByteToWideChar(CP_UTF8, 0, filename, -1, filenameW, sizeof(filenameW)) == 0) {
+                if (MultiByteToWideChar(CP_UTF8, 0, filename, -1, filenameW, ma_countof(filenameW)) == 0) {
                     handle = NULL;
                 } else {
                     handle = (ma_handle)LoadPackagedLibrary(filenameW, 0);
@@ -41495,18 +41495,37 @@ Web Audio Backend
 #ifdef MA_HAS_WEBAUDIO
 #include <emscripten/emscripten.h>
 
-#if (__EMSCRIPTEN_major__ > 3) || (__EMSCRIPTEN_major__ == 3 && (__EMSCRIPTEN_minor__ > 1 || (__EMSCRIPTEN_minor__ == 1 && __EMSCRIPTEN_tiny__ >= 32)))
+#ifndef MA_EMSCRIPTEN_MAJOR
+    #if defined(__EMSCRIPTEN_MAJOR__)
+        #define MA_EMSCRIPTEN_MAJOR __EMSCRIPTEN_MAJOR__
+    #else
+        #define MA_EMSCRIPTEN_MAJOR __EMSCRIPTEN_major__
+    #endif
+#endif
+#ifndef MA_EMSCRIPTEN_MINOR
+    #if defined(__EMSCRIPTEN_MINOR__)
+        #define MA_EMSCRIPTEN_MINOR __EMSCRIPTEN_MINOR__
+    #else
+        #define MA_EMSCRIPTEN_MINOR __EMSCRIPTEN_minor__
+    #endif
+#endif
+#ifndef MA_EMSCRIPTEN_TINY
+    #if defined(__EMSCRIPTEN_TINY__)
+        #define MA_EMSCRIPTEN_TINY __EMSCRIPTEN_TINY__
+    #else
+        #define MA_EMSCRIPTEN_TINY __EMSCRIPTEN_tiny__
+    #endif
+#endif
+
+#if (MA_EMSCRIPTEN_MAJOR > 3) || (MA_EMSCRIPTEN_MAJOR == 3 && (MA_EMSCRIPTEN_MINOR > 1 || (MA_EMSCRIPTEN_MINOR == 1 && MA_EMSCRIPTEN_TINY >= 32)))
     #include <emscripten/webaudio.h>
     #define MA_SUPPORT_AUDIO_WORKLETS
 
-    #if (__EMSCRIPTEN_major__ > 3) || (__EMSCRIPTEN_major__ == 3 && (__EMSCRIPTEN_minor__ > 1 || (__EMSCRIPTEN_minor__ == 1 && __EMSCRIPTEN_tiny__ >= 70)))
+    #if (MA_EMSCRIPTEN_MAJOR > 3) || (MA_EMSCRIPTEN_MAJOR == 3 && (MA_EMSCRIPTEN_MINOR > 1 || (MA_EMSCRIPTEN_MINOR == 1 && MA_EMSCRIPTEN_TINY >= 70)))
         #define MA_SUPPORT_AUDIO_WORKLETS_VARIABLE_BUFFER_SIZE
     #endif
 #endif
 
-/*
-TODO: Version 0.12: Swap this logic around so that AudioWorklets are used by default. Add MA_NO_AUDIO_WORKLETS.
-*/
 #if defined(MA_ENABLE_AUDIO_WORKLETS) && defined(MA_SUPPORT_AUDIO_WORKLETS)
     #define MA_USE_AUDIO_WORKLETS
 #endif
@@ -59242,6 +59261,10 @@ static ma_result ma_data_source_read_pcm_frames_within_range(ma_data_source* pDa
     ma_result result;
     ma_uint64 framesRead = 0;
     ma_bool32 loop = ma_data_source_is_looping(pDataSource);
+
+    if (pFramesRead != NULL) {
+        *pFramesRead = 0;
+    }
 
     if (pDataSourceBase == NULL) {
         return MA_AT_END;
